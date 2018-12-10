@@ -27,6 +27,7 @@ import org.wso2.carbon.CarbonConstants;
 import org.wso2.carbon.identity.application.common.IdentityApplicationManagementException;
 import org.wso2.carbon.identity.application.common.model.ServiceProvider;
 import org.wso2.carbon.identity.core.util.IdentityUtil;
+import org.wso2.carbon.identity.mgt.policy.PolicyViolationException;
 import org.wso2.carbon.identity.scim2.common.exceptions.IdentitySCIMException;
 import org.wso2.carbon.identity.scim2.common.group.SCIMGroupHandler;
 import org.wso2.carbon.identity.scim2.common.utils.AttributeMapper;
@@ -82,6 +83,8 @@ public class SCIMUserManager implements UserManager {
 
     public static final String FILTERING_DELIMITER = "*";
     public static final String SQL_FILTERING_DELIMITER = "%";
+    private static final String SCIM2_COMPLIANCE = "scim2.compliance";
+    private static final String ERROR_CODE_INVALID_USERNAME = "31301";
     private static Log log = LogFactory.getLog(SCIMUserManager.class);
     private UserStoreManager carbonUM = null;
     private ClaimManager carbonClaimManager = null;
@@ -160,11 +163,31 @@ public class SCIMUserManager implements UserManager {
             log.info("User: " + user.getUserName() + " is created through SCIM.");
 
         } catch (UserStoreException e) {
+            handleErrorsOnUserNameAndPasswordPolicy(e);
             String errMsg = "Error in adding the user: " + user.getUserName() + " to the user store. ";
             errMsg += e.getMessage();
             throw new CharonException(errMsg, e);
         }
         return user;
+    }
+
+    private void handleErrorsOnUserNameAndPasswordPolicy(Throwable e) throws BadRequestException {
+
+        String specCompliance = System.getProperty(SCIM2_COMPLIANCE);
+        if (Boolean.parseBoolean(specCompliance)) {
+            int i = 0; // this variable is used to avoid endless loop if the e.getCause never becomes null.
+            while (e != null && i < 10) {
+
+                if (e instanceof UserStoreException && e.getMessage().contains(ERROR_CODE_INVALID_USERNAME)) {
+                    throw new BadRequestException(e.getMessage(), ResponseCodeConstants.INVALID_VALUE);
+                }
+                if (e instanceof PolicyViolationException) {
+                    throw new BadRequestException(e.getMessage(), ResponseCodeConstants.INVALID_VALUE);
+                }
+                e = e.getCause();
+                i++;
+            }
+        }
     }
 
     @Override
@@ -352,7 +375,8 @@ public class SCIMUserManager implements UserManager {
     }
 
     @Override
-    public User updateUser(User user, Map<String, Boolean> requiredAttributes) throws CharonException {
+    public User updateUser(User user, Map<String, Boolean> requiredAttributes) throws CharonException,
+            BadRequestException {
         try {
             if (log.isDebugEnabled()) {
                 log.debug("Updating user: " + user.getUserName());
@@ -436,6 +460,7 @@ public class SCIMUserManager implements UserManager {
             log.info("User: " + user.getUserName() + " updated through SCIM.");
             return getUser(user.getId(),requiredAttributes);
         } catch (UserStoreException e) {
+            handleErrorsOnUserNameAndPasswordPolicy(e);
             throw new CharonException("Error while updating attributes of user: " + user.getUserName(), e);
         } catch (BadRequestException | CharonException e) {
             throw new CharonException("Error occured while trying to update the user");
@@ -844,7 +869,7 @@ public class SCIMUserManager implements UserManager {
 
     @Override
     public User updateMe(User user, Map<String, Boolean> requiredAttributes)
-            throws NotImplementedException, CharonException {
+            throws NotImplementedException, CharonException, BadRequestException {
         return updateUser(user, requiredAttributes);
     }
 
