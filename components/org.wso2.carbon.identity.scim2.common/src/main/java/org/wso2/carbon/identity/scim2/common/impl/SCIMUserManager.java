@@ -1308,6 +1308,9 @@ public class SCIMUserManager implements UserManager {
             } else {
                 log.warn("There is no updated field in the group: " + oldGroup.getDisplayName() +
                         ". Therefore ignoring the provisioning.");
+                // Hence no changes were done, return original group. There are some cases, new group can have
+                // duplicated members.
+                return oldGroup;
             }
 
         } catch (UserStoreException | IdentitySCIMException e) {
