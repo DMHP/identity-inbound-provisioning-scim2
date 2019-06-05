@@ -442,7 +442,7 @@ public class SCIMUserManager implements UserManager {
             }
 
             Map<String, String> oldClaimList = carbonUM.getUserClaimValues(user.getUserName(), requiredClaimsInLocalDialect
-                    .toArray(new String[requiredClaims.size()]), null);
+                    .toArray(new String[requiredClaimsInLocalDialect.size()]), null);
 
             for (Map.Entry<String, String> entry : oldClaimList.entrySet()) {
                 if (!isImmutableClaim(entry.getKey())) {
@@ -1491,7 +1491,6 @@ public class SCIMUserManager implements UserManager {
         } catch (org.wso2.carbon.user.core.UserStoreException e) {
             throw new CharonException("Error occurred while retrieving SCIM user information", e);
         }
-
         Map<String, Group> groupMetaAttributesCache = new HashMap<>();
 
         for (String userName : userNames) {
