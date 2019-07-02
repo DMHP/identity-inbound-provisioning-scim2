@@ -1203,8 +1203,7 @@ public class SCIMUserManager implements UserManager {
     @Override
     public Group updateGroup(Group oldGroup, Group newGroup, Map<String, Boolean> requiredAttributes)
             throws CharonException {
-        String displayName = null;
-        displayName = oldGroup.getDisplayName();
+
         try {
             String userStoreDomainFromSP = getUserStoreDomainFromSP();
 
@@ -1287,11 +1286,11 @@ public class SCIMUserManager implements UserManager {
                 }
             }
 
-            //we do not update Identity_SCIM DB here since it is updated in SCIMUserOperationListener's methods.
+            // We do not update Identity_SCIM DB here since it is updated in SCIMUserOperationListener's methods.
 
-            //Update name if it is changed
+            // Update name if it is changed.
             if (!(oldGroup.getDisplayName().equalsIgnoreCase(newGroup.getDisplayName()))) {
-                //update group name in carbon UM
+                // Update group name in carbon UM.
                 carbonUM.updateRoleName(oldGroup.getDisplayName(),
                         newGroup.getDisplayName());
                 updated = true;
