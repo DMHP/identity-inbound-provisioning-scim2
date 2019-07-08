@@ -158,9 +158,27 @@ public class SCIMUserManager implements UserManager {
             if (claimsMap.containsKey(SCIMConstants.UserSchemaConstants.USER_NAME_URI)) {
                 claimsMap.remove(SCIMConstants.UserSchemaConstants.USER_NAME_URI);
             }
+            Map<String, String> scimToLocalClaimsMap = SCIMCommonUtils.getSCIMtoLocalMappings();
             Map<String, String> claimsInLocalDialect = SCIMCommonUtils.convertSCIMtoLocalDialect(claimsMap);
-            carbonUM.addUser(user.getUserName(), user.getPassword(), null, claimsInLocalDialect, null);
+            Map<String, String> clonedClaimsMap = new HashMap(claimsInLocalDialect);
+            carbonUM.addUser(user.getUserName(), user.getPassword(), null, clonedClaimsMap, null);
             log.info("User: " + user.getUserName() + " is created through SCIM.");
+
+            // The username will modify in the returned map.
+            String modifiedUserName = null;
+            if (clonedClaimsMap
+                    .containsKey(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI))) {
+                modifiedUserName = clonedClaimsMap
+                        .get(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI));
+                clonedClaimsMap.remove(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI));
+            }
+            // Check if the user claims map passed has been modified.
+            if (!claimsInLocalDialect.equals(clonedClaimsMap)) {
+                if (log.isDebugEnabled()) {
+                    log.debug("Claims of user : " + user.getUserName() + " is updated. Populate updated claims.");
+                }
+                return getModifiedUser(user, scimToLocalClaimsMap, clonedClaimsMap, modifiedUserName);
+            }
 
         } catch (UserStoreException e) {
             handleErrorsOnUserNameAndPasswordPolicy(e);
@@ -169,6 +187,27 @@ public class SCIMUserManager implements UserManager {
             throw new CharonException(errMsg, e);
         }
         return user;
+    }
+
+    private User getModifiedUser(User user, Map<String, String> scimToLocalClaimsMap,
+            Map<String, String> clonedClaimsMap, String modifiedUserName)
+            throws CharonException, BadRequestException, org.wso2.carbon.user.core.UserStoreException {
+
+        user.setUserName(modifiedUserName);
+        clonedClaimsMap
+                .put(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI), user.getUserName());
+        String userId = clonedClaimsMap.get(scimToLocalClaimsMap.get(SCIMConstants.ResourceTypeSchemaConstants.ID_URI));
+        clonedClaimsMap.put(scimToLocalClaimsMap.get(SCIMConstants.CommonSchemaConstants.LOCATION_URI),
+                SCIMCommonUtils.getSCIMUserURL(userId));
+        try {
+            return (User) AttributeMapper.constructSCIMObjectFromAttributes(
+                    SCIMCommonUtils.convertLocalToSCIMDialect(clonedClaimsMap, scimToLocalClaimsMap),
+                    SCIMCommonConstants.USER);
+        } catch (NotFoundException e) {
+            String errMsg = "Failed to populate modified claims for user : " + user.getUserName() + " created.";
+            errMsg += e.getMessage();
+            throw new CharonException(errMsg, e);
+        }
     }
 
     private void handleErrorsOnUserNameAndPasswordPolicy(Throwable e) throws BadRequestException {
