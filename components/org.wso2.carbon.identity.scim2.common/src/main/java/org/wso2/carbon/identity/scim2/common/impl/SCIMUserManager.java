@@ -158,9 +158,23 @@ public class SCIMUserManager implements UserManager {
             if (claimsMap.containsKey(SCIMConstants.UserSchemaConstants.USER_NAME_URI)) {
                 claimsMap.remove(SCIMConstants.UserSchemaConstants.USER_NAME_URI);
             }
+            Map<String, String> scimToLocalClaimsMap = SCIMCommonUtils.getSCIMtoLocalMappings();
             Map<String, String> claimsInLocalDialect = SCIMCommonUtils.convertSCIMtoLocalDialect(claimsMap);
             carbonUM.addUser(user.getUserName(), user.getPassword(), null, claimsInLocalDialect, null);
             log.info("User: " + user.getUserName() + " is created through SCIM.");
+
+            // User name can be modified during user creation.
+            String modifiedUserName = null;
+            if (claimsInLocalDialect
+                    .containsKey(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI))) {
+                modifiedUserName = claimsInLocalDialect
+                        .get(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI));
+                if (log.isDebugEnabled()) {
+                    log.debug("Username of user: " + user.getUserName() + ", is changed to: " + modifiedUserName);
+                }
+                claimsInLocalDialect.remove(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI));
+            }
+            return constructUserObjectFromClaimMap(user, scimToLocalClaimsMap, claimsInLocalDialect, modifiedUserName);
 
         } catch (UserStoreException e) {
             handleErrorsOnUserNameAndPasswordPolicy(e);
@@ -168,7 +182,32 @@ public class SCIMUserManager implements UserManager {
             errMsg += e.getMessage();
             throw new CharonException(errMsg, e);
         }
-        return user;
+    }
+
+    /**
+     * Create user object from claim map after user creation.
+     *
+     * @param user                 User object from the create request.
+     * @param scimToLocalClaimsMap SCIM to local claims mapping.
+     * @param claimMap             Claim map after user creation.
+     * @param modifiedUserName     Modified user name during user creation.
+     * @return User updated user object
+     * @throws CharonException CharonException
+     */
+    private User constructUserObjectFromClaimMap(User user, Map<String, String> scimToLocalClaimsMap,
+            Map<String, String> claimMap, String modifiedUserName)
+            throws CharonException, BadRequestException, org.wso2.carbon.user.core.UserStoreException {
+
+        user.setUserName(modifiedUserName);
+        claimMap.put(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI), user.getUserName());
+        try {
+            return (User) AttributeMapper.constructSCIMObjectFromAttributes(
+                    SCIMCommonUtils.convertLocalToSCIMDialect(claimMap, scimToLocalClaimsMap),
+                    SCIMCommonConstants.USER);
+        } catch (NotFoundException e) {
+            String errMsg = "Failed to populate the modified claims for newly created user: " + user.getUserName();
+            throw new CharonException(errMsg, e);
+        }
     }
 
     private void handleErrorsOnUserNameAndPasswordPolicy(Throwable e) throws BadRequestException {
