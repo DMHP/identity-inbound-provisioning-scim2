@@ -1344,9 +1344,16 @@ public class SCIMUserManager implements UserManager {
 
             if (updated) {
                 log.info("Group: " + newGroup.getDisplayName() + " is updated through SCIM.");
+                // In case the duplicate existing in the newGroup, query the corresponding group
+                // again and return it.
+                Group newUpdatedGroup = getGroup(newGroup.getId(), requiredAttributes);
+                return newUpdatedGroup;
             } else {
                 log.warn("There is no updated field in the group: " + oldGroup.getDisplayName() +
                         ". Therefore ignoring the provisioning.");
+                // Hence no changes were done, return original group. There are some cases, new group can have
+                // duplicated members.
+                return oldGroup;
             }
 
         } catch (UserStoreException | IdentitySCIMException e) {
@@ -1357,8 +1364,6 @@ public class SCIMUserManager implements UserManager {
             throw new CharonException("Error in updating the group", e);
 
         }
-
-        return newGroup;
     }
 
     /**
