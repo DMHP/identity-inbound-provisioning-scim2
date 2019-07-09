@@ -163,6 +163,7 @@ public class SCIMUserManager implements UserManager {
             carbonUM.addUser(user.getUserName(), user.getPassword(), null, claimsInLocalDialect, null);
             log.info("User: " + user.getUserName() + " is created through SCIM.");
 
+            // User name can be modified during user creation.
             String modifiedUserName = null;
             if (claimsInLocalDialect
                     .containsKey(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI))) {
