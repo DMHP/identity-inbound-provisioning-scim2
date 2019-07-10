@@ -163,51 +163,21 @@ public class SCIMUserManager implements UserManager {
             carbonUM.addUser(user.getUserName(), user.getPassword(), null, claimsInLocalDialect, null);
             log.info("User: " + user.getUserName() + " is created through SCIM.");
 
-            // User name can be modified during user creation.
-            String modifiedUserName = null;
-            if (claimsInLocalDialect
-                    .containsKey(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI))) {
-                modifiedUserName = claimsInLocalDialect
-                        .get(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI));
-                if (log.isDebugEnabled()) {
-                    log.debug("Username of user: " + user.getUserName() + ", is changed to: " + modifiedUserName);
-                }
-                claimsInLocalDialect.remove(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI));
-            }
-            return constructUserObjectFromClaimMap(user, scimToLocalClaimsMap, claimsInLocalDialect, modifiedUserName);
-
+            // Get required SCIM Claims in local claim dialect.
+            List<String> requiredClaimsInLocalDialect = getRequiredClaimsInLocalDialect(scimToLocalClaimsMap,
+                    requiredAttributes);
+            // Get the user from the user store in order to get the default attributes during the user creation
+            // response.
+            user = this.getSCIMUser(user.getUserName(), requiredClaimsInLocalDialect, scimToLocalClaimsMap);
+            // Set the schemas of the scim user.
+            user.setSchemas();
         } catch (UserStoreException e) {
             handleErrorsOnUserNameAndPasswordPolicy(e);
             String errMsg = "Error in adding the user: " + user.getUserName() + " to the user store. ";
             errMsg += e.getMessage();
             throw new CharonException(errMsg, e);
         }
-    }
-
-    /**
-     * Create user object from claim map after user creation.
-     *
-     * @param user                 User object from the create request.
-     * @param scimToLocalClaimsMap SCIM to local claims mapping.
-     * @param claimMap             Claim map after user creation.
-     * @param modifiedUserName     Modified user name during user creation.
-     * @return User updated user object
-     * @throws CharonException CharonException
-     */
-    private User constructUserObjectFromClaimMap(User user, Map<String, String> scimToLocalClaimsMap,
-            Map<String, String> claimMap, String modifiedUserName)
-            throws CharonException, BadRequestException, org.wso2.carbon.user.core.UserStoreException {
-
-        user.setUserName(modifiedUserName);
-        claimMap.put(scimToLocalClaimsMap.get(SCIMConstants.UserSchemaConstants.USER_NAME_URI), user.getUserName());
-        try {
-            return (User) AttributeMapper.constructSCIMObjectFromAttributes(
-                    SCIMCommonUtils.convertLocalToSCIMDialect(claimMap, scimToLocalClaimsMap),
-                    SCIMCommonConstants.USER);
-        } catch (NotFoundException e) {
-            String errMsg = "Failed to populate the modified claims for newly created user: " + user.getUserName();
-            throw new CharonException(errMsg, e);
-        }
+        return user;
     }
 
     private void handleErrorsOnUserNameAndPasswordPolicy(Throwable e) throws BadRequestException {
@@ -1965,5 +1935,29 @@ public class SCIMUserManager implements UserManager {
                 claim.equals(claimMappings.get(SCIMConstants.CommonSchemaConstants.LOCATION_URI)) ||
                 claim.equals(claimMappings.get(SCIMConstants.UserSchemaConstants.FAMILY_NAME_URI)) ||
                 claim.contains(UserCoreConstants.ClaimTypeURIs.IDENTITY_CLAIM_URI);
+    }
+
+    /**
+     * Get the local claims mapped to the required SCIM claims.
+     *
+     * @param scimToLocalClaimsMap SCIM claims to local claims map.
+     * @param requiredAttributes   required attributes of the user.
+     * @return list of required claims in local dialect.
+     */
+    private List<String> getRequiredClaimsInLocalDialect(Map<String, String> scimToLocalClaimsMap,
+            Map<String, Boolean> requiredAttributes) {
+
+        List<String> requiredClaims = getOnlyRequiredClaims(scimToLocalClaimsMap.keySet(), requiredAttributes);
+        List<String> requiredClaimsInLocalDialect;
+        if (MapUtils.isNotEmpty(scimToLocalClaimsMap)) {
+            scimToLocalClaimsMap.keySet().retainAll(requiredClaims);
+            requiredClaimsInLocalDialect = new ArrayList<>(scimToLocalClaimsMap.values());
+        } else {
+            if (log.isDebugEnabled()) {
+                log.debug("SCIM to Local Claim mappings list is empty.");
+            }
+            requiredClaimsInLocalDialect = new ArrayList<>();
+        }
+        return requiredClaimsInLocalDialect;
     }
 }
