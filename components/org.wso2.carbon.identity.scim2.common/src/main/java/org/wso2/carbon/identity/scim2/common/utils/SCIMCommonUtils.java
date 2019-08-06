@@ -212,6 +212,18 @@ public class SCIMCommonUtils {
     }
 
     /**
+     * Converts claim Uri in SCIM dialect to local WSO2 dialect.
+     *
+     * @param claimUri SCIM claim URI.
+     * @return         Local claim URI.
+     * @throws UserStoreException
+     */
+    public static String convertSCIMtoLocalDialect(String claimUri) throws UserStoreException {
+
+        return getSCIMtoLocalMappings().get(claimUri);
+    }
+
+    /**
      * Converts claims in local WSO2 dialect to SCIM dialect.
      *
      * @param claimsMap         Map of local claims and claim values.
