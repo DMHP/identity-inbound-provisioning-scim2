@@ -1842,6 +1842,16 @@ public class SCIMUserManager implements UserManager {
             throws org.wso2.carbon.user.core.UserStoreException {
 
         String searchAttribute = getSearchAttribute(filterOperation, attributeValue, FILTERING_DELIMITER);
+
+        // Convert attribute name to the local claim dialect if it's mapped to an identity claim. Identity
+        // claims are persisted in the IdentityDataStore in the local claim dialect, and does not support searching
+        // users with claim URIs in SCIM dialect.
+        String attributeNameInLocalDialect = SCIMCommonUtils.convertSCIMtoLocalDialect(attributeName);
+        if (attributeNameInLocalDialect.contains(UserCoreConstants.ClaimTypeURIs.IDENTITY_CLAIM_URI)) {
+            return carbonUM.getUserList(attributeNameInLocalDialect, searchAttribute,
+                    UserCoreConstants.DEFAULT_PROFILE);
+        }
+
         return carbonUM.getUserList(attributeName, searchAttribute, UserCoreConstants.DEFAULT_PROFILE);
     }
 
