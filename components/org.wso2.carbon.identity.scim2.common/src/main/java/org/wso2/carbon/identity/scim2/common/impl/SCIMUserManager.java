@@ -1387,26 +1387,54 @@ public class SCIMUserManager implements UserManager {
         } else if(rootNode != null) {
             return filterGroups(rootNode, requiredAttributes);
         } else {
-            return listGroups(requiredAttributes);
+            return listGroups(startIndex, count, sortBy, sortOrder, domainName, requiredAttributes);
         }
     }
 
-    private List<Object> listGroups(Map<String, Boolean> requiredAttributes) throws CharonException {
+    /**
+     * List all the groups.
+     *
+     * @param startIndex         Start index in the request.
+     * @param count              Limit in the request.
+     * @param sortBy             SortBy
+     * @param sortOrder          Sorting order
+     * @param domainName         Domain Name
+     * @param requiredAttributes Required attributes
+     * @return
+     * @throws CharonException
+     */
+    private List<Object> listGroups(int startIndex, int count, String sortBy, String sortOrder, String domainName,
+            Map<String, Boolean> requiredAttributes) throws CharonException {
+
         List<Object> groupList = new ArrayList<>();
         //0th index is to store total number of results;
         groupList.add(0);
         try {
-            SCIMGroupHandler groupHandler = new SCIMGroupHandler(carbonUM.getTenantId());
-            Set<String> roleNames = groupHandler.listSCIMRoles();
+            Set<String> roleNames = getRoleNamesForGroupsEndpoint(domainName);
             for (String roleName : roleNames) {
-                Group group = this.getGroupWithName(roleName);
-                if (group.getId() != null) {
-                    groupList.add(group);
+                String userStoreDomainName = IdentityUtil.extractDomainFromName(roleName);
+                if (isInternalOrApplicationGroup(userStoreDomainName) || isSCIMEnabled(userStoreDomainName)) {
+                    if (log.isDebugEnabled()) {
+                        log.debug("SCIM is enabled for the user-store domain : " + userStoreDomainName + ". "
+                                + "Including group with name : " + roleName + " in the response.");
+                    }
+                    Group group = this.getGroupWithName(roleName);
+                    if (group.getId() != null) {
+                        groupList.add(group);
+                    }
+                } else {
+                    if (log.isDebugEnabled()) {
+                        log.debug("SCIM is disabled for the user-store domain : " + userStoreDomainName + ". Hence "
+                                + "group with name : " + roleName + " is excluded in the response.");
+                    }
                 }
             }
         } catch (org.wso2.carbon.user.core.UserStoreException e) {
             String errMsg = "Error in obtaining role names from user store.";
             errMsg += e.getMessage();
+            throw new CharonException(errMsg, e);
+        } catch (org.wso2.carbon.user.api.UserStoreException e) {
+            String errMsg = "Error in retrieving role names from user store.";
             throw new CharonException(errMsg, e);
         } catch (IdentitySCIMException | BadRequestException e) {
             throw new CharonException("Error in retrieving SCIM Group information from database.", e);
@@ -1416,6 +1444,32 @@ public class SCIMUserManager implements UserManager {
         return groupList;
     }
 
+    /**
+     * Get role names according to the given domain. If the domain is not specified, roles of all the user
+     * stores will be returned.
+     *
+     * @param domainName Domain name
+     * @return Roles List
+     * @throws UserStoreException
+     * @throws IdentitySCIMException
+     */
+    private Set<String> getRoleNamesForGroupsEndpoint(String domainName)
+            throws UserStoreException, IdentitySCIMException {
+
+        SCIMGroupHandler groupHandler = new SCIMGroupHandler(carbonUM.getTenantId());
+        if (StringUtils.isEmpty(domainName)) {
+            return groupHandler.listSCIMRoles();
+        } else {
+            // If the domain is specified create a attribute value with the domain name.
+            String searchValue = domainName + CarbonConstants.DOMAIN_SEPARATOR + SCIMCommonConstants.ANY;
+
+            // Retrieve roles using the above attribute value.
+            List<String> roleList = Arrays.asList(((AbstractUserStoreManager) carbonUM)
+                    .getRoleNames(searchValue, MAX_ITEM_LIMIT_UNLIMITED, true, true, true));
+            Set<String> roleNames = new HashSet<>(roleList);
+            return roleNames;
+        }
+    }
 
     private List<Object> filterGroups(Node node, Map<String, Boolean> requiredAttributes)
             throws NotImplementedException, CharonException {
