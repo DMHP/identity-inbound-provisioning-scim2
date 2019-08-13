@@ -80,6 +80,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.wso2.carbon.identity.scim2.common.utils.SCIMCommonUtils.isFilteringEnhancementsEnabled;
+
 public class SCIMUserManager implements UserManager {
 
     public static final String FILTERING_DELIMITER = "*";
@@ -576,68 +578,270 @@ public class SCIMUserManager implements UserManager {
                                      String sortBy, String sortOrder, String domainName)
             throws NotImplementedException, CharonException {
 
-        List<Object> filteredUsers = new ArrayList<>();
-        //0th index is to store total number of results
-        filteredUsers.add(0);
-        String[] userNames;
+        // Handle single attribute search.
 
-        //Handle single attribute search
         if (node instanceof ExpressionNode) {
-            String attributeName = ((ExpressionNode) node).getAttributeValue();
-            String filterOperation = ((ExpressionNode) node).getOperation();
-            String attributeValue = ((ExpressionNode) node).getValue();
-
-            if (log.isDebugEnabled()) {
-                log.debug(String.format("Listing users by filter: %s %s %s",
-                        attributeName, filterOperation, attributeValue));
-            }
-
-            try {
-                if (isNotFilteringSupported(filterOperation)) {
-                    throw new NotImplementedException(String.format("System does not support filter operator: %s",
-                            filterOperation));
-                }
-                if (SCIMCommonUtils.isFilteringEnhancementsEnabled()) {
-                    if (SCIMCommonConstants.EQ.equalsIgnoreCase(filterOperation)) {
-                        if (StringUtils.equals(attributeName, SCIMConstants.UserSchemaConstants.USER_NAME_URI) &&
-                                !StringUtils.contains(attributeValue, CarbonConstants.DOMAIN_SEPARATOR)) {
-                            attributeValue = UserCoreConstants.PRIMARY_DEFAULT_DOMAIN_NAME +
-                                    CarbonConstants.DOMAIN_SEPARATOR + attributeValue;
-                        }
-                    }
-                }
-                if (!SCIMConstants.UserSchemaConstants.GROUP_URI.equals(attributeName)) {
-                    //get the user name of the user with this id
-                    userNames = getUserNames(attributeName, filterOperation, attributeValue);
-                } else {
-                    if (filterOperation.equalsIgnoreCase(SCIMCommonConstants.EQ)) {
-                        userNames = carbonUM.getUserListOfRole(attributeValue);
-                    } else if (carbonUM instanceof AbstractUserStoreManager) {
-                        String[] roleNames = getRoleNames(filterOperation, attributeValue);
-                        userNames = getUserListOfRoles(roleNames);
-                    } else {
-                        throw new NotImplementedException(String.format("Filter operator %s is not supported " +
-                                "by the user store.", filterOperation));
-                    }
-                }
-            } catch (UserStoreException e) {
-                throw new CharonException(String.format("Error in filtering users by attribute name: %s, " +
-                                "attribute value: %s and filter operation %s", attributeName, attributeValue,
-                        filterOperation), e);
-            }
-
-            userNames = paginateUsers(userNames, limit, offset);
-            filteredUsers.set(0, userNames.length);
-            filteredUsers.addAll(getFilteredUserDetails(userNames, requiredAttributes));
-            return filteredUsers;
-
+            return filterUsersBySingleAttribute((ExpressionNode) node, requiredAttributes, offset, limit, sortBy,
+                    sortOrder, domainName);
         } else if (node instanceof OperationNode) {
+            if (log.isDebugEnabled())
+                log.debug("Listing users by multi attribute filter");
+            List<Object> filteredUsers = new ArrayList<>();
+
+            // 0th index is to store total number of results.
+            filteredUsers.add(0);
+
             // Support multi attribute filtering.
             return getMultiAttributeFilteredUsers(node, requiredAttributes, offset, limit, sortBy, sortOrder,
                     domainName, filteredUsers);
         } else {
-            throw new CharonException("Unsupported Operation");
+            throw new CharonException("Unknown operation. Not either an expression node or an operation node.");
         }
+    }
+
+    /**
+     * Method to filter users for a filter with a single attribute.
+     *
+     * @param node               Expression node for single attribute filtering
+     * @param requiredAttributes Required attributes for the response
+     * @param offset             Starting index of the count
+     * @param limit              Counting value
+     * @param sortBy             SortBy
+     * @param sortOrder          Sorting order
+     * @param domainName         Domain to run the filter
+     * @return User list with detailed attributes
+     * @throws CharonException Error while filtering
+     */
+    private List<Object> filterUsersBySingleAttribute(ExpressionNode node, Map<String, Boolean> requiredAttributes,
+            int offset, int limit, String sortBy, String sortOrder, String domainName) throws CharonException {
+
+        String[] userNames;
+
+        if (log.isDebugEnabled()) {
+            log.debug(String.format("Listing users by filter: %s %s %s", node.getAttributeValue(), node.getOperation(),
+                    node.getValue()));
+        }
+
+        // Check whether the filter operation is supported by the users endpoint.
+        if (isFilteringNotSupported(node.getOperation())) {
+            String errorMessage =
+                    "Filter operation: " + node.getOperation() + " is not supported for filtering in users endpoint.";
+            throw new CharonException(errorMessage);
+        }
+        domainName = resolveDomainName(domainName, node);
+        try {
+            userNames = filterUsersUsingLegacyAPIs(node, limit, offset, domainName);
+        } catch (NotImplementedException e) {
+            String errorMessage = String.format("System does not support filter operator: %s", node.getOperation());
+            throw new CharonException(errorMessage, e);
+        }
+        return getDetailedUsers(userNames, requiredAttributes);
+    }
+
+    /**
+     * Method to resolve the domain name.
+     *
+     * @param domainName Domain to run the filter
+     * @param node       Expression node for single attribute filtering
+     * @return Resolved domainName
+     * @throws CharonException
+     */
+    private String resolveDomainName(String domainName, ExpressionNode node) throws CharonException {
+
+        try {
+            // Extract the domain name if the domain name is embedded in the filter attribute value.
+            domainName = resolveDomainNameInAttributeValue(domainName, node);
+        } catch (BadRequestException e) {
+            String errorMessage = String
+                    .format("Domain parameter: %s in request does not match with the domain name in the attribute "
+                                    + "value: %s ", domainName, node.getValue());
+            throw new CharonException(errorMessage, e);
+        }
+        // Get domain name according to Filter Enhancements properties as in identity.xml
+        if (StringUtils.isEmpty(domainName)) {
+            domainName = getFilteredDomainName(node);
+        }
+        return domainName;
+    }
+
+    /**
+     * Update the domain parameter from the domain in attribute value and update the value in the expression node to the
+     * newly extracted value.
+     *
+     * @param domainName Domain name in the filter request
+     * @param node       Expression node
+     * @return Domain name extracted from the attribute value
+     * @throws BadRequestException Domain miss match in domain parameter and attribute value
+     */
+    private String resolveDomainNameInAttributeValue(String domainName, ExpressionNode node)
+            throws BadRequestException {
+
+        String extractedDomain;
+        String attributeName = node.getAttributeValue();
+        String filterOperation = node.getOperation();
+        String attributeValue = node.getValue();
+
+        if (isDomainNameEmbeddedInAttributeValue(filterOperation, attributeName, attributeValue)) {
+            int indexOfDomainSeparator = attributeValue.indexOf(CarbonConstants.DOMAIN_SEPARATOR);
+            extractedDomain = attributeValue.substring(0, indexOfDomainSeparator).toUpperCase();
+
+            // Update then newly extracted attribute value in the expression node.
+            int startingIndexOfAttributeValue = indexOfDomainSeparator + 1;
+            node.setValue(attributeValue.substring(startingIndexOfAttributeValue));
+
+            // Check whether the domain name is equal to the extracted domain name from attribute value.
+            if (StringUtils.isNotEmpty(domainName) && StringUtils.isNotEmpty(extractedDomain) && !extractedDomain
+                    .equalsIgnoreCase(domainName))
+                throw new BadRequestException(String.format(
+                        " Domain name %s in the domain parameter does not match with the domain name %s in search "
+                                + "attribute value of %s claim.", domainName, extractedDomain, attributeName));
+
+            if (StringUtils.isEmpty(domainName) && StringUtils.isNotEmpty(extractedDomain)) {
+                if (log.isDebugEnabled())
+                    log.debug(String.format("Domain name %s set from the domain name in the attribute value %s ",
+                            extractedDomain, attributeValue));
+                return extractedDomain;
+            }
+        }
+        return domainName;
+    }
+
+    /**
+     * Method to verify whether there is a domain in the attribute value.
+     *
+     * @param filterOperation Operation of the expression node
+     * @param attributeName   Attribute name of the expression node
+     * @param attributeValue  Value of the expression node
+     * @return Whether there is a domain embedded to the attribute value
+     */
+    private boolean isDomainNameEmbeddedInAttributeValue(String filterOperation, String attributeName,
+            String attributeValue) {
+
+        // Checks whether the domain separator is in the attribute value.
+        if (StringUtils.contains(attributeValue, CarbonConstants.DOMAIN_SEPARATOR)) {
+
+            // Checks whether the attribute name is username or group uri.
+            if (StringUtils.equals(attributeName, SCIMConstants.UserSchemaConstants.USER_NAME_URI) || StringUtils
+                    .equals(attributeName, SCIMConstants.UserSchemaConstants.GROUP_URI)) {
+
+                // Checks whether the operator is equal to EQ, SW, EW, CO.
+                if (SCIMCommonConstants.EQ.equalsIgnoreCase(filterOperation) || SCIMCommonConstants.SW
+                        .equalsIgnoreCase(filterOperation) || SCIMCommonConstants.CO.equalsIgnoreCase(filterOperation)
+                        || SCIMCommonConstants.EW.equalsIgnoreCase(filterOperation)) {
+                    if (log.isDebugEnabled())
+                        log.debug(String.format("Attribute value %s is embedded with a domain in %s claim, ",
+                                attributeValue, attributeName));
+                    // If all the above conditions are true, then a domain is embedded to the attribute value.
+                    return true;
+                }
+            }
+        }
+        // If no domain name in the attribute value, return false.
+        return false;
+    }
+
+    /**
+     * Validate whether filter enhancements are enabled and then return primary default domain name as the domain to
+     * be filtered.
+     *
+     * @param node Expression node
+     * @return PRIMARY domainName if property enabled, Null otherwise.
+     */
+    private String getFilteredDomainName(ExpressionNode node) {
+
+        // Set filter values.
+        String attributeName = node.getAttributeValue();
+        String filterOperation = node.getOperation();
+        String attributeValue = node.getValue();
+
+        if (isFilteringEnhancementsEnabled()) {
+            if (SCIMCommonConstants.EQ.equalsIgnoreCase(filterOperation)) {
+                if (StringUtils.equals(attributeName, SCIMConstants.UserSchemaConstants.USER_NAME_URI) && !StringUtils
+                        .contains(attributeValue, CarbonConstants.DOMAIN_SEPARATOR)) {
+                    return UserCoreConstants.PRIMARY_DEFAULT_DOMAIN_NAME;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Method to filter users if the user store is not an instance of PaginatedUserStoreManager and
+     * ENABLE_PAGINATED_USER_STORE is not enabled.
+     *
+     * @param node   Expression node
+     * @param limit  Number of users required for counting
+     * @param offset Starting user index for start counting
+     * @return List of paginated set of users.
+     * @throws NotImplementedException Not supported filter operation
+     * @throws UserStoreException
+     */
+    private String[] filterUsersUsingLegacyAPIs(ExpressionNode node, int limit, int offset, String domainName)
+            throws NotImplementedException, CharonException {
+
+        String[] userNames;
+
+        // Set filter values.
+        String attributeName = node.getAttributeValue();
+        String filterOperation = node.getOperation();
+        String attributeValue = node.getValue();
+
+        // If there is a domain, append the domain with the domain separator in front of the new attribute value if
+        // domain separator is not found in the attribute value.
+        if (StringUtils.isNotEmpty(domainName) && StringUtils
+                .containsNone(attributeValue, CarbonConstants.DOMAIN_SEPARATOR)) {
+            attributeValue = domainName.toUpperCase() + CarbonConstants.DOMAIN_SEPARATOR + node.getValue();
+        }
+
+        try {
+            if (SCIMConstants.UserSchemaConstants.GROUP_URI.equals(attributeName)) {
+                if (carbonUM instanceof AbstractUserStoreManager) {
+                    String[] roleNames = getRoleNames(attributeName, filterOperation, attributeValue);
+                    userNames = getUserListOfRoles(roleNames);
+                } else {
+                    String errorMessage = String
+                            .format("Filter operator %s is not supported by the user store.", filterOperation);
+                    throw new NotImplementedException(errorMessage);
+                }
+            } else {
+                // Get the user name of the user with this id.
+                userNames = getUserNames(attributeName, filterOperation, attributeValue);
+            }
+        } catch (UserStoreException e) {
+            String errorMessage = String.format("Error while filtering the users for filter with attribute name: %s ,"
+                            + " filter operation: %s and attribute value: %s. ", attributeName, filterOperation,
+                    attributeValue);
+            throw new CharonException(errorMessage, e);
+        }
+        userNames = paginateUsers(userNames, limit, offset);
+        return userNames;
+    }
+
+    /**
+     * Method to remove duplicate users and get the user details.
+     *
+     * @param userNames          Filtered user names
+     * @param requiredAttributes Required attributes in the response
+     * @return Users list with populated attributes
+     * @throws CharonException Error in retrieving user details
+     */
+    private List<Object> getDetailedUsers(String[] userNames, Map<String, Boolean> requiredAttributes)
+        throws CharonException {
+
+        List<Object> filteredUsers = new ArrayList<>();
+        // 0th index is to store total number of results.
+        filteredUsers.add(0);
+
+        // Remove duplicate users.
+        HashSet<String> userNamesSet = new HashSet<>(Arrays.asList(userNames));
+        userNames = userNamesSet.toArray(new String[0]);
+
+        // Set total number of filtered results.
+        filteredUsers.set(0, userNames.length);
+
+        // Get details of the finalized user list.
+        filteredUsers.addAll(getFilteredUserDetails(userNames, requiredAttributes));
+        return filteredUsers;
     }
 
     /**
@@ -1224,7 +1428,7 @@ public class SCIMUserManager implements UserManager {
         String filterOperation = ((ExpressionNode)node).getOperation();
         String attributeValue = ((ExpressionNode)node).getValue();
 
-        if (isNotFilteringSupported(filterOperation)) {
+        if (isFilteringNotSupported(filterOperation)) {
             String error = "System does not support filter operator: " + filterOperation;
             throw new NotImplementedException(error);
         }
@@ -1852,11 +2056,12 @@ public class SCIMUserManager implements UserManager {
     }
 
     /**
-     * check whether the filtering is supported
-     * @param filterOperation operator use for filtering
+     * check whether the filtering is supported.
+     *
+     * @param filterOperation Operator to be used for filtering
      * @return boolean to check whether operator is supported
      */
-    private boolean isNotFilteringSupported(String filterOperation) {
+    private boolean isFilteringNotSupported(String filterOperation) {
 
         return !filterOperation.equalsIgnoreCase(SCIMCommonConstants.EQ)
                 && !filterOperation.equalsIgnoreCase(SCIMCommonConstants.CO)
@@ -1878,21 +2083,26 @@ public class SCIMUserManager implements UserManager {
     }
 
     /**
-     * get the search value after appending the delimiters
-     * @param filterOperation operator value
-     * @param attributeValue search value
-     * @param delimiter delimiter for based on search type
-     * @return search attribute
+     * Get the search value after appending the delimiters according to the attribute name to be filtered.
+     *
+     * @param attributeName   Filter attribute name
+     * @param filterOperation Operator value
+     * @param attributeValue  Search value
+     * @param delimiter       Filter delimiter based on search type
+     * @return Search attribute
      */
-    private String getSearchAttribute(String filterOperation, String attributeValue, String delimiter) {
+    private String getSearchAttribute(String attributeName, String filterOperation, String attributeValue,
+            String delimiter) {
 
         String searchAttribute = null;
         if (filterOperation.equalsIgnoreCase(SCIMCommonConstants.CO)) {
-            searchAttribute = delimiter + attributeValue + delimiter;
+            searchAttribute = createSearchValueForCoOperation(attributeName, filterOperation, attributeValue,
+                    delimiter);
         } else if (filterOperation.equalsIgnoreCase(SCIMCommonConstants.SW)) {
             searchAttribute = attributeValue + delimiter;
         } else if (filterOperation.equalsIgnoreCase(SCIMCommonConstants.EW)) {
-            searchAttribute = delimiter + attributeValue;
+            searchAttribute = createSearchValueForEwOperation(attributeName, filterOperation, attributeValue,
+                    delimiter);
         } else if (filterOperation.equalsIgnoreCase(SCIMCommonConstants.EQ)) {
             searchAttribute = attributeValue;
         }
@@ -1900,33 +2110,151 @@ public class SCIMUserManager implements UserManager {
     }
 
     /**
-     * get list of roles that matches the search criteria
-     * @param filterOperation operator value
-     * @param attributeValue search value
-     * @return list of role names
-     * @throws org.wso2.carbon.user.core
-    .UserStoreException
+     * Create search value for CO operation.
+     *
+     * @param attributeName   Filter attribute name
+     * @param filterOperation Operator value
+     * @param attributeValue  Filter attribute value
+     * @param delimiter       Filter delimiter based on search type
+     * @return Search attribute value
      */
-    private String[] getRoleNames(String filterOperation, String attributeValue) throws org.wso2.carbon.user.core
-            .UserStoreException {
+    private String createSearchValueForCoOperation(String attributeName, String filterOperation, String attributeValue,
+            String delimiter) {
 
-        String searchAttribute = getSearchAttribute(filterOperation, attributeValue, FILTERING_DELIMITER);
-        return ((AbstractUserStoreManager) carbonUM).getRoleNames(searchAttribute, MAX_ITEM_LIMIT_UNLIMITED, true,
-                true, true);
+        // For attributes which support domain embedding, create search value by appending the delimiter after
+        // the domain separator.
+        if (isDomainSupportedAttribute(attributeName)) {
+
+            // Check whether domain is embedded in the attribute value.
+            String[] attributeItems = attributeValue.split(CarbonConstants.DOMAIN_SEPARATOR, 2);
+            if (attributeItems.length > 1) {
+                return createSearchValueWithDomainForCoEwOperations(attributeName, filterOperation, attributeValue,
+                        delimiter, attributeItems);
+            } else {
+                return delimiter + attributeValue + delimiter;
+            }
+        } else {
+            return delimiter + attributeValue + delimiter;
+        }
     }
 
     /**
-     * get list of user that matches the search criteria
-     * @param attributeName field name for search
-     * @param filterOperation operator
-     * @param attributeValue search value
-     * @return list of users
+     * Create search value for EW operation.
+     *
+     * @param attributeName   Filter attribute name
+     * @param filterOperation Operator value
+     * @param attributeValue  Filter attribute value
+     * @param delimiter       Filter delimiter based on search type
+     * @return Search attribute value
+     */
+    private String createSearchValueForEwOperation(String attributeName, String filterOperation, String attributeValue,
+            String delimiter) {
+
+        // For attributes which support domain embedding, create search value by appending the delimiter after
+        // the domain separator.
+        if (isDomainSupportedAttribute(attributeName)) {
+            // Extract the domain attached to the attribute value and then append the delimiter.
+            String[] attributeItems = attributeValue.split(CarbonConstants.DOMAIN_SEPARATOR, 2);
+            if (attributeItems.length > 1) {
+                return createSearchValueWithDomainForCoEwOperations(attributeName, filterOperation, attributeValue,
+                        delimiter, attributeItems);
+            } else {
+                return delimiter + attributeValue;
+            }
+        } else {
+            return delimiter + attributeValue;
+        }
+    }
+
+    /**
+     * Create search value for CO and EW operations when domain is detected in the filter attribute value.
+     *
+     * @param attributeName   Filter attribute name
+     * @param filterOperation Operator value
+     * @param attributeValue  Search value
+     * @param delimiter       Filter delimiter based on search type
+     * @param attributeItems  Extracted domain and filter value
+     * @return Search attribute value
+     */
+    private String createSearchValueWithDomainForCoEwOperations(String attributeName, String filterOperation,
+            String attributeValue, String delimiter, String[] attributeItems) {
+
+        String searchAttribute;
+        if (log.isDebugEnabled()) {
+            log.debug(String.format(
+                    "Domain detected in attribute value: %s for filter attribute: %s for " + "filter operation; %s.",
+                    attributeValue, attributeName, filterOperation));
+        }
+        if (filterOperation.equalsIgnoreCase(SCIMCommonConstants.EW)) {
+            searchAttribute = attributeItems[0] + CarbonConstants.DOMAIN_SEPARATOR + delimiter + attributeItems[1];
+        } else if (filterOperation.equalsIgnoreCase(SCIMCommonConstants.CO)) {
+            searchAttribute =
+                    attributeItems[0] + CarbonConstants.DOMAIN_SEPARATOR + delimiter + attributeItems[1] + delimiter;
+        } else {
+            if (log.isDebugEnabled()) {
+                log.debug(String.format("Filter operation: %s is not supported by method "
+                        + "createSearchValueWithDomainForCoEwOperations to create a search value."));
+            }
+            searchAttribute = attributeValue;
+        }
+        if (log.isDebugEnabled()) {
+            log.debug(
+                    String.format("Search attribute value : %s is created for operation: %s created with domain : %s ",
+                            searchAttribute, filterOperation, attributeItems[0]));
+        }
+        return searchAttribute;
+    }
+
+    /**
+     * Check whether the filter attribute support filtering with the domain embedded in the attribute value.
+     *
+     * @param attributeName Attribute to filter
+     * @return True if the given attribute support embedding domain in attribute value.
+     */
+    private boolean isDomainSupportedAttribute(String attributeName) {
+
+        return SCIMConstants.UserSchemaConstants.USER_NAME_URI.equalsIgnoreCase(attributeName)
+                || SCIMConstants.CommonSchemaConstants.ID_URI.equalsIgnoreCase(attributeName)
+                || SCIMConstants.UserSchemaConstants.GROUP_URI.equalsIgnoreCase(attributeName)
+                || SCIMConstants.GroupSchemaConstants.DISPLAY_NAME_URI.equalsIgnoreCase(attributeName)
+                || SCIMConstants.GroupSchemaConstants.DISPLAY_URI.equalsIgnoreCase(attributeName);
+    }
+
+    /**
+     * Get list of roles that matches the search criteria.
+     *
+     * @param attributeName   Filter attribute name
+     * @param filterOperation Operator value
+     * @param attributeValue  Search value
+     * @return List of role names
+     * @throws org.wso2.carbon.user.core.UserStoreException Error getting roleNames.
+     */
+    private String[] getRoleNames(String attributeName, String filterOperation, String attributeValue)
+            throws org.wso2.carbon.user.core.UserStoreException {
+
+        String searchAttribute = getSearchAttribute(attributeName, filterOperation, attributeValue,
+                FILTERING_DELIMITER);
+        if (log.isDebugEnabled()) {
+            log.debug(String.format("Filtering roleNames from search attribute: %s", searchAttribute));
+        }
+        return ((AbstractUserStoreManager) carbonUM)
+                .getRoleNames(searchAttribute, MAX_ITEM_LIMIT_UNLIMITED, true, true, true);
+    }
+
+    /**
+     * Get list of user that matches the search criteria.
+     *
+     * @param attributeName   Field name for search
+     * @param filterOperation Operator
+     * @param attributeValue  Search value
+     * @return List of users
      * @throws org.wso2.carbon.user.core.UserStoreException
      */
     private String[] getUserNames(String attributeName, String filterOperation, String attributeValue)
             throws org.wso2.carbon.user.core.UserStoreException {
 
-        String searchAttribute = getSearchAttribute(filterOperation, attributeValue, FILTERING_DELIMITER);
+        String searchAttribute = getSearchAttribute(attributeName, filterOperation, attributeValue,
+                FILTERING_DELIMITER);
 
         // Convert attribute name to the local claim dialect if it's mapped to an identity claim. Identity
         // claims are persisted in the IdentityDataStore in the local claim dialect, and does not support searching
@@ -1936,7 +2264,9 @@ public class SCIMUserManager implements UserManager {
             return carbonUM.getUserList(attributeNameInLocalDialect, searchAttribute,
                     UserCoreConstants.DEFAULT_PROFILE);
         }
-
+        if (log.isDebugEnabled()) {
+            log.debug(String.format("Filtering userNames from search attribute: %s", searchAttribute));
+        }
         return carbonUM.getUserList(attributeName, searchAttribute, UserCoreConstants.DEFAULT_PROFILE);
     }
 
@@ -1975,7 +2305,7 @@ public class SCIMUserManager implements UserManager {
             userRoleList = fullRoleList.toArray(new String[fullRoleList.size()]);
 
         } else if (attributeName.equals(SCIMConstants.GroupSchemaConstants.DISPLAY_NAME_URI)) {
-            userRoleList = getRoleNames(filterOperation, attributeValue);
+            userRoleList = getRoleNames(attributeName, filterOperation, attributeValue);
         } else {
             userRoleList = getGroupNamesFromDB(attributeName, filterOperation, attributeValue);
         }
@@ -1995,8 +2325,12 @@ public class SCIMUserManager implements UserManager {
     private String[] getGroupNamesFromDB(String attributeName, String filterOperation, String attributeValue)
             throws org.wso2.carbon.user.core.UserStoreException, IdentitySCIMException {
 
-        String searchAttribute = getSearchAttribute(filterOperation, attributeValue, SQL_FILTERING_DELIMITER);
+        String searchAttribute = getSearchAttribute(attributeName, filterOperation, attributeValue,
+                SQL_FILTERING_DELIMITER);
         SCIMGroupHandler groupHandler = new SCIMGroupHandler(carbonUM.getTenantId());
+        if (log.isDebugEnabled()) {
+            log.debug(String.format("Filtering roleNames from DB from search attribute: %s", searchAttribute));
+        }
         return groupHandler.getGroupListFromAttributeName(attributeName, searchAttribute);
     }
 
