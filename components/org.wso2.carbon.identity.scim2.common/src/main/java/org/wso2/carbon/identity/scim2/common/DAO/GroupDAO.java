@@ -382,7 +382,7 @@ public class GroupDAO {
 
         // Resolve sql query for filtering.
         if (StringUtils.isNotEmpty(domainName)) {
-            // if the domain is given, domain needs to be searched in ROLE_NAME column as well.
+            // If the domain is given, need to check within the roles in the given domain.
             sqlQuery = SQLQueries.LIST_SCIM_GROUPS_SQL_BY_ATT_AND_ATT_VALUE_AND_ROLE_NAME;
         } else {
             sqlQuery = SQLQueries.LIST_SCIM_GROUPS_SQL_BY_ATT_AND_ATT_VALUE;
@@ -393,7 +393,7 @@ public class GroupDAO {
                 prepStmt.setString(2, searchAttributeName);
                 prepStmt.setString(3, searchAttributeValue);
 
-                // Append SQL_FILTERING_DELIMITER to ROLE_NAME param to filter in a given domain.
+                // Filtering withing the roles in the given domain.
                 if (StringUtils.isNotEmpty(domainName)) {
                     prepStmt.setString(4, domainName.toUpperCase() + "%");
                 }
@@ -401,7 +401,8 @@ public class GroupDAO {
                     while (rSet.next()) {
                         String roleName = rSet.getString(1);
                         if (StringUtils.isNotEmpty(roleName)) {
-                            // Remove the primary domain name from roleNames.
+                            // Domain name is removed from roles in the primary domain. So that "PRIMARY/" won't be
+                            // added in front of the role name.
                             roleList.add(removePrimaryDomainName(roleName));
                         }
                     }
@@ -429,12 +430,9 @@ public class GroupDAO {
         String[] domainSplitFromRoleName = roleName.split(CarbonConstants.DOMAIN_SEPARATOR, 2);
 
         // Length equal to one would imply that no domain separator is included in the roleName.
-        if (domainSplitFromRoleName.length > 1) {
-            if (UserCoreConstants.PRIMARY_DEFAULT_DOMAIN_NAME.equalsIgnoreCase(domainSplitFromRoleName[0])) {
-                return domainSplitFromRoleName[1];
-            } else {
-                return roleName;
-            }
+        if (domainSplitFromRoleName.length > 1 && UserCoreConstants.PRIMARY_DEFAULT_DOMAIN_NAME
+                .equalsIgnoreCase(domainSplitFromRoleName[0])) {
+            return domainSplitFromRoleName[1];
         } else {
             return roleName;
         }

@@ -307,7 +307,7 @@ public class SCIMUserManager implements UserManager {
         } else if (rootNode != null) {
             return filterUsers(rootNode, requiredAttributes, startIndex, count, sortBy, sortOrder, domainName);
         } else {
-            return listUsers(requiredAttributes, startIndex, count, sortBy, sortOrder, domainName);
+            return listUsers(requiredAttributes, domainName);
         }
     }
 
@@ -323,16 +323,11 @@ public class SCIMUserManager implements UserManager {
      * Method to list users for given conditions.
      *
      * @param requiredAttributes Required attributes for the response
-     * @param offset             Starting index of the count
-     * @param limit              Counting value
-     * @param sortBy             SortBy
-     * @param sortOrder          Sorting order
      * @param domainName         Name of the user store
      * @return User list with detailed attributes
      * @throws CharonException Error while listing users
      */
-    private List<Object> listUsers(Map<String, Boolean> requiredAttributes, int offset, int limit, String sortBy,
-            String sortOrder, String domainName) throws CharonException {
+    private List<Object> listUsers(Map<String, Boolean> requiredAttributes, String domainName) throws CharonException {
 
         List<Object> users = new ArrayList<>();
         //0th index is to store total number of results.
@@ -345,12 +340,9 @@ public class SCIMUserManager implements UserManager {
         }
 
         if (ArrayUtils.isEmpty(userNames)) {
-            if (log.isDebugEnabled()) {
-                String message = String.format("There are no users who comply with the requested conditions: "
-                        + "startIndex = %d, count = %d", offset, limit);
-                if (StringUtils.isNotEmpty(domainName)) {
-                    message = String.format(message + ", domain = %s", domainName);
-                }
+            if (log.isDebugEnabled() && StringUtils.isNotEmpty(domainName)) {
+                String message = String.format("There are no users who comply with the requested conditions: domain ="
+                        + " %s", domainName);
                 log.debug(message);
             }
         } else {
@@ -766,8 +758,7 @@ public class SCIMUserManager implements UserManager {
     }
 
     /**
-     * Method to filter users if the user store is not an instance of PaginatedUserStoreManager and
-     * ENABLE_PAGINATED_USER_STORE is not enabled.
+     * Method to filter users.
      *
      * @param node   Expression node
      * @param limit  Number of users required for counting
@@ -1385,26 +1376,21 @@ public class SCIMUserManager implements UserManager {
         }  else if(startIndex != 1){
             throw new NotImplementedException("Pagination is not supported");
         } else if(rootNode != null) {
-            return filterGroups(rootNode, startIndex, count, sortBy, sortOrder, domainName, requiredAttributes);
+            return filterGroups(rootNode, domainName, requiredAttributes);
         } else {
-            return listGroups(startIndex, count, sortBy, sortOrder, domainName, requiredAttributes);
+            return listGroups(domainName, requiredAttributes);
         }
     }
 
     /**
      * List all the groups.
      *
-     * @param startIndex         Start index in the request.
-     * @param count              Limit in the request.
-     * @param sortBy             SortBy
-     * @param sortOrder          Sorting order
      * @param domainName         Domain Name
      * @param requiredAttributes Required attributes
      * @return
      * @throws CharonException
      */
-    private List<Object> listGroups(int startIndex, int count, String sortBy, String sortOrder, String domainName,
-            Map<String, Boolean> requiredAttributes) throws CharonException {
+    private List<Object> listGroups(String domainName, Map<String, Boolean> requiredAttributes) throws CharonException {
 
         List<Object> groupList = new ArrayList<>();
         //0th index is to store total number of results;
@@ -1475,23 +1461,17 @@ public class SCIMUserManager implements UserManager {
      * Filter users according to a given filter.
      *
      * @param rootNode           Node
-     * @param startIndex         Starting index of the results
-     * @param count              Number of required results.
-     * @param sortBy             SortBy
-     * @param sortOrder          Sorting order
      * @param domainName         Domain name in the request
      * @param requiredAttributes Required attributes
      * @return List of filtered groups
      * @throws NotImplementedException Complex filters are used.
      * @throws CharonException         Unknown node operation.
      */
-    private List<Object> filterGroups(Node rootNode, int startIndex, int count, String sortBy, String sortOrder,
-            String domainName, Map<String, Boolean> requiredAttributes)
+    private List<Object> filterGroups(Node rootNode, String domainName, Map<String, Boolean> requiredAttributes)
         throws NotImplementedException, CharonException {
 
         if (rootNode instanceof ExpressionNode) {
-            return filterGroupsBySingleAttribute((ExpressionNode) rootNode, startIndex, count, sortBy, sortOrder,
-                    domainName, requiredAttributes);
+            return filterGroupsBySingleAttribute((ExpressionNode) rootNode, domainName, requiredAttributes);
         } else if (rootNode instanceof OperationNode) {
             String error = "Complex filters are not supported yet";
             throw new NotImplementedException(error);
@@ -1504,17 +1484,13 @@ public class SCIMUserManager implements UserManager {
      * Filter groups with a single attribute.
      *
      * @param node               Expression node
-     * @param startIndex         Starting index
-     * @param count              Number of results required
-     * @param sortBy             SortBy
-     * @param sortOrder          Sorting order
      * @param domainName         Domain to be filtered
      * @param requiredAttributes Required attributes
      * @return Filtered groups
      * @throws CharonException Error in Filtering
      */
-    private List<Object> filterGroupsBySingleAttribute(ExpressionNode node, int startIndex, int count, String sortBy,
-            String sortOrder, String domainName, Map<String, Boolean> requiredAttributes) throws CharonException {
+    private List<Object> filterGroupsBySingleAttribute(ExpressionNode node, String domainName,
+            Map<String, Boolean> requiredAttributes) throws CharonException {
 
         String attributeName = node.getAttributeValue();
         String filterOperation = node.getOperation();
