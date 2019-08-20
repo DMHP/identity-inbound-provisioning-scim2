@@ -235,11 +235,31 @@ public class SCIMGroupHandler {
      *
      * @return list of SCIM groups
      * @throws IdentitySCIMException
+     * @deprecated Method does not support domain filtering. Use
+     * {@link org.wso2.carbon.identity.scim2.common.group.SCIMGroupHandler#getGroupListFromAttributeName(String,
+     * String, String)}
      */
+    @Deprecated
     public String[] getGroupListFromAttributeName(String attributeName, String searchAttribute)
             throws IdentitySCIMException {
 
         GroupDAO groupDAO = new GroupDAO();
         return groupDAO.getGroupNameList(attributeName, searchAttribute, this.tenantId);
+    }
+
+    /**
+     * Lists the Groups created from SCIM with a attribute filter and search regex.
+     *
+     * @param attributeName   Search attribute name
+     * @param searchAttribute Search attribute value
+     * @param domainName      Domain to search
+     * @return List of SCIM groups.
+     * @throws IdentitySCIMException IdentitySCIMException when reading the SCIM Group information.
+     */
+    public String[] getGroupListFromAttributeName(String attributeName, String searchAttribute, String domainName)
+            throws IdentitySCIMException {
+
+        GroupDAO groupDAO = new GroupDAO();
+        return groupDAO.getGroupNameList(attributeName, searchAttribute, this.tenantId, domainName);
     }
 }
