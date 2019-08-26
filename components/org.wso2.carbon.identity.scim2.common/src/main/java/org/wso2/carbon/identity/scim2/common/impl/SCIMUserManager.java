@@ -2115,12 +2115,12 @@ public class SCIMUserManager implements UserManager {
                 } catch (UserStoreException e) {
                     if (e.getMessage()
                             .contains(UserCoreErrorConstants.ErrorMessages.ERROR_CODE_NON_EXISTING_USER.getCode())) {
-                        log.error("UserNotFound - User: skim1 does not exist in: second.com, hence skipping to add as "
-                                + "the member for the group: " + groupName);
+                        log.error("UserNotFound - User: " + userName + "does not exist in: " + userStoreDomainName
+                                + ", hence skipping to add as the member for the group: " + groupName);
                         continue;
                     } else {
                         throw new org.wso2.carbon.user.core.UserStoreException(
-                                "Error occurred while obtaining the user ID for the member(user)" + ": " + userName, e);
+                                "Error occurred while obtaining the user ID for the member(user): " + userName, e);
                     }
                 }
             }
