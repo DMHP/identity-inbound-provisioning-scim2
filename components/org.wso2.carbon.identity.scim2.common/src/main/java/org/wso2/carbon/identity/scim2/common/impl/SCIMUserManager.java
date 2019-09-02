@@ -226,11 +226,23 @@ public class SCIMUserManager implements UserManager {
             } else {
                 //get Claims related to SCIM claim dialect
                 Map<String, String> scimToLocalClaimsMap = SCIMCommonUtils.getSCIMtoLocalMappings();
+                for (Map.Entry<String, String> entry : scimToLocalClaimsMap.entrySet()) {
+                    String key = entry.getKey();
+                    String value = entry.getValue();
+                    log.info("==PTBCSUB-46== Scim To Local claims Map key :" + key);
+                    log.info("==PTBCSUB-46== Scim To Local claims Map value :" + value);
+                }
                 List<String> requiredClaims = getOnlyRequiredClaims(scimToLocalClaimsMap.keySet(), requiredAttributes);
+                for(String requiredClaim :requiredClaims){
+                    log.info("==PTBCSUB-46== Required Claims : "+requiredClaim);
+                }
                 List<String> requiredClaimsInLocalDialect;
                 if (MapUtils.isNotEmpty(scimToLocalClaimsMap)) {
                     scimToLocalClaimsMap.keySet().retainAll(requiredClaims);
                     requiredClaimsInLocalDialect = new ArrayList<>(scimToLocalClaimsMap.values());
+                    for (String requiredClaim : requiredClaimsInLocalDialect) {
+                        log.info("==PTBCSUB-46== Required Claims In Local Dialect :" + requiredClaim);
+                    }
                 } else {
                     if (log.isDebugEnabled()) {
                         log.debug("SCIM to Local Claim mappings list is empty.");
@@ -1895,6 +1907,9 @@ public class SCIMUserManager implements UserManager {
             //obtain user claim values
             Map<String, String> userClaimValues = carbonUM.getUserClaimValues(
                     userName, claimURIList.toArray(new String[claimURIList.size()]), null);
+            for (String claimURI : claimURIList) {
+                log.info("==PTBCSUB-46== User claim values : " + claimURI);
+            }
             Map<String, String> attributes = SCIMCommonUtils.convertLocalToSCIMDialect(userClaimValues,
                     scimToLocalClaimsMap);
 
